@@ -1,0 +1,20 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${API_PORT:-8000}:8000"
+    develop:
+      watch:
+        - action: sync
+          path: ./apps/api/src
+          target: /app/apps/api/src
+        - action: rebuild
+          path: ./pyproject.toml
+
+# Postgres + Redis are intentionally omitted — persistence across sessions
+# is a non-goal for the hackathon (see CLAUDE.md). Add them here when scope
+# changes; the reference docker-compose has the canonical recipe.

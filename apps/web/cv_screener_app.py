@@ -33,11 +33,39 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("🧪 CV-Screener")
-st.caption(
-    "Parses CV + JD, runs three assessment agents in parallel, integrity-checks the "
-    "result, scores deterministically, and recommends Shortlist / Hold / Reject. "
-    "Two human-in-the-loop confidence gates can pause the pipeline for recruiter approval."
+# Harver-aligned brand tokens — used by avatar, profile chips, and skill pills.
+# Recommendation badge colours (green/amber/red) stay semantic; everything else
+# leans on this peach + neutral palette.
+BRAND_PEACH = "#FF8B5E"
+BRAND_PEACH_SOFT = "#FFE8DC"
+BRAND_PEACH_BG = "#FFF7F2"
+BRAND_INK = "#1A1A1A"
+BRAND_INK_MUTED = "#5C5C5C"
+BRAND_ACCENT_BLUE = "#378ADD"
+BRAND_ACCENT_BLUE_SOFT = "#E6F1FB"
+
+# Harver-style header — peach gradient stripe + title.
+st.markdown(
+    f"""
+    <div style="
+        background: linear-gradient(135deg, {BRAND_PEACH} 0%, #FFB380 60%, {BRAND_PEACH_SOFT} 100%);
+        padding: 22px 28px; border-radius: 10px; margin-bottom: 18px;
+        color: {BRAND_INK};">
+        <div style="font-size:11px; letter-spacing:2px; opacity:0.85; font-weight:600;">
+            CANDIDATE SCREENING WORKFLOW
+        </div>
+        <div style="font-size:28px; font-weight:700; margin-top:4px;">
+            🧪&nbsp; CV-Screener
+        </div>
+        <div style="font-size:14px; max-width:780px; margin-top:6px; opacity:0.85;">
+            Parses CV + JD, runs three assessment agents in parallel, integrity-checks
+            the result, scores deterministically, and recommends
+            <b>Shortlist</b> / <b>Hold</b> / <b>Reject</b>. Two human-in-the-loop
+            confidence gates can pause the pipeline for recruiter approval.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 
@@ -394,10 +422,11 @@ def _render_candidate_profile(state_: dict):
         st.markdown(
             f"""
             <div style="
-                background:#7F77DD; color:white;
+                background:{BRAND_PEACH}; color:white;
                 width:64px; height:64px; border-radius:50%;
                 display:flex; align-items:center; justify-content:center;
-                font-size:22px; font-weight:600; margin-top:6px;">
+                font-size:22px; font-weight:600; margin-top:6px;
+                box-shadow: 0 2px 8px rgba(255,139,94,0.25);">
                 {_initials(name)}
             </div>
             """,
@@ -486,8 +515,9 @@ def _render_skills(matched: list[dict] | None, missing: list[str] | None):
         if nice_matches:
             st.markdown(
                 " ".join(
-                    f"<span style='background:#EEEDFE;color:#3C3489;padding:3px 8px;"
-                    f"border-radius:10px;margin:2px;display:inline-block;font-size:13px;'>"
+                    f"<span style='background:{BRAND_ACCENT_BLUE_SOFT};color:#0C447C;"
+                    f"padding:3px 8px;border-radius:10px;margin:2px;"
+                    f"display:inline-block;font-size:13px;'>"
                     f"{m['skill']} <em>(nice-to-have)</em></span>"
                     for m in nice_matches
                 ),

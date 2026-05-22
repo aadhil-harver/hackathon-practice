@@ -13,10 +13,6 @@ compatibility with ``from api.agent.graph import graph`` callers.
 
 from __future__ import annotations
 
-import os
-
-from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
 from api.agent.agents.behavioral import BEHAVIORAL_PROMPT
@@ -24,42 +20,8 @@ from api.agent.agents.classifier import CLASSIFIER_PROMPT, QuestionClassifier
 from api.agent.agents.coach import COACH_PROMPT
 from api.agent.agents.hr_career import HR_CAREER_PROMPT
 from api.agent.agents.technical import TECHNICAL_PROMPT
+from api.agent.llm import make_llm
 from api.agent.state import InterviewState
-
-load_dotenv()
-
-# LangSmith tracing — opt-in via env. If LANGSMITH_TRACING=true and
-# LANGSMITH_API_KEY are set in .env, LangChain/LangGraph auto-send traces.
-# Default the project name here so traces land in "interview-prep" instead of
-# the catch-all "default" project. Users can override via LANGSMITH_PROJECT.
-os.environ.setdefault("LANGSMITH_PROJECT", "interview-prep")
-
-
-def _make_llm() -> ChatOpenAI:
-    """Construct the OpenRouter-backed chat model used by every node.
-
-    OpenRouter is OpenAI-compatible: point ``ChatOpenAI`` at its base_url and
-    use ``OPENROUTER_API_KEY``. Default model is Claude Sonnet 4.6 (strongest
-    Sonnet currently on OpenRouter); override with ``INTERVIEW_MODEL``.
-    """
-    openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-    if not openrouter_api_key:
-        raise RuntimeError(
-            "OPENROUTER_API_KEY is not set. Add it to .env at the repo root. "
-            "Get a key from https://openrouter.ai/keys"
-        )
-
-    # OpenRouter enforces an upper-bound check against remaining credit. Without
-    # this cap, ChatOpenAI sends max_tokens=<model max> (65536 on Sonnet 4.6),
-    # which low-credit accounts cannot afford. Our prompts target ~350 words, so
-    # 800 is comfortable headroom.
-    return ChatOpenAI(
-        model=os.getenv("INTERVIEW_MODEL", "anthropic/claude-sonnet-4.6"),
-        base_url="https://openrouter.ai/api/v1",
-        api_key=openrouter_api_key,
-        temperature=0.3,
-        max_tokens=int(os.getenv("INTERVIEW_MAX_TOKENS", "800")),
-    )
 
 
 def _history_as_dicts(messages):
@@ -77,7 +39,7 @@ def build_graph():
     Returns a compiled LangGraph ``CompiledGraph``. Called once at app startup
     (FastAPI lifespan) and again when the Streamlit app imports the graph.
     """
-    llm = _make_llm()
+    llm = make_llm()
 
     # ── Node functions ───────────────────────────────────────────────────
 

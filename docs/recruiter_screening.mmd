@@ -1,0 +1,74 @@
+%% CV-Screener workflow — source-of-truth design diagram.
+%% Approved 2026-05-22. Implementation tracker: CLAUDE.md > Build order.
+%%
+%% Legend (matches classDef colors below):
+%%   neutral   — Input / output (data plumbing, not agents)
+%%   llm       — LLM-backed agent
+%%   parallel  — LLM agent run as part of the parallel fan-out
+%%   det       — Deterministic Python (no LLM call)
+%%   hitl      — Human-in-the-loop confidence gate / override
+%%   risk      — Risk / safety node (integrity check or HITL sink)
+
+flowchart TD
+    A([Input Handler\nCV + JD Upload])
+    A --> B
+
+    B[1 · Parsing Agent\nCV + JD → structured JSON]
+    B --> CC1
+
+    CC1{Confidence check}
+    CC1 -->|low conf| HR1[⚑ Human Review]
+    CC1 -->|pass| PAR
+
+    PAR[ ]:::invisible
+
+    PAR --> SM
+    PAR --> SN
+    PAR --> EX
+
+    SM[2 · Skill Match\nMatched + missing skills]
+    SN[3 · Seniority\nJunior / mid / senior]
+    EX[4 · Experience\nStrengths + concerns]
+
+    SM --> JOIN
+    SN --> JOIN
+    EX --> JOIN
+
+    JOIN[ ]:::invisible
+    JOIN --> SD
+
+    SD[5 · Integrity & Fairness\nGaps · inconsistencies · bias flags]
+    SD --> CC2
+
+    CC2{Confidence check}
+    CC2 -->|high risk| HR2[⚑ Human Review]
+    CC2 -->|pass| SC
+
+    SC[6 · Scoring Agent\nskills 40% · seniority 30% · domain 20% · edu 10%]
+    SC --> HO
+
+    HO[⚑ Human Override\nRecruiter adjusts weights or score]
+    HO --> RC
+
+    RC[7 · Recommendation\nShortlist · Hold · Reject]
+    RC --> IQ
+
+    IQ[8 · Interview Questions\nTailored to gaps — skip if Reject]
+    IQ --> RR
+
+    RR([Recruiter Report UI\nScore breakdown · flags · questions])
+
+    classDef invisible fill:none,stroke:none
+    classDef llm fill:#EEEDFE,stroke:#7F77DD,color:#3C3489
+    classDef parallel fill:#E1F5EE,stroke:#1D9E75,color:#085041
+    classDef det fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    classDef hitl fill:#FAEEDA,stroke:#BA7517,color:#633806
+    classDef risk fill:#FAECE7,stroke:#D85A30,color:#712B13
+    classDef neutral fill:#F1EFE8,stroke:#888780,color:#444441
+
+    class A,RR neutral
+    class B,IQ llm
+    class SM,SN,EX parallel
+    class SC,RC det
+    class CC1,CC2,HO hitl
+    class SD,HR1,HR2 risk

@@ -1,4 +1,5 @@
 import streamlit as st
+from langchain_core.runnables import RunnableConfig
 
 from interview import graph
 
@@ -74,7 +75,16 @@ def run_graph_with_status(user_text: str):
             "coach_tips": None,
         }
 
-        for chunk in graph.stream(graph_input):
+        # Group this turn under a single named parent run in LangSmith.
+        # Turn number = (existing user messages + 1) // 2 once we've appended.
+        turn_number = sum(1 for m in st.session_state.messages if m["role"] == "user")
+        run_config: RunnableConfig = {
+            "run_name": "interview-turn",
+            "tags": ["interview-prep", "streamlit"],
+            "metadata": {"surface": "streamlit", "turn": turn_number},
+        }
+
+        for chunk in graph.stream(graph_input, config=run_config):
             for node_name, node_update in chunk.items():
                 update = node_update or {}
                 if node_name == "classifier":

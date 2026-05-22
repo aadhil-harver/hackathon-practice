@@ -4,11 +4,18 @@ from dotenv import load_dotenv
 from typing import Annotated, Literal
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 load_dotenv()
+
+# LangSmith tracing — opt-in via env. If LANGSMITH_TRACING=true and
+# LANGSMITH_API_KEY are set in .env, LangChain/LangGraph auto-send traces.
+# Default the project name here so traces land in "interview-prep" instead of
+# the catch-all "default" project. Users can override via LANGSMITH_PROJECT.
+os.environ.setdefault("LANGSMITH_PROJECT", "interview-prep")
 
 # OpenRouter is OpenAI-compatible: point ChatOpenAI at its base_url and use
 # OPENROUTER_API_KEY. Default model is Claude Sonnet 4.6 (strongest Sonnet
@@ -29,7 +36,7 @@ llm = ChatOpenAI(
     # this cap, ChatOpenAI sends max_tokens=<model max> (65536 on Sonnet 4.6),
     # which low-credit accounts cannot afford. Our prompts target ~350 words, so
     # 1500 is comfortable headroom.
-    max_tokens=int(os.getenv("INTERVIEW_MAX_TOKENS", "1500")),
+    max_tokens=int(os.getenv("INTERVIEW_MAX_TOKENS", "800")),
 )
 
 
@@ -241,6 +248,7 @@ graph = graph_builder.compile()
 
 def run_interview_prep():
     state = {"messages": [], "question_type": None, "coach_tips": None}
+    turn = 0
 
     while True:
         user_input = input("Interview question: ")
@@ -248,11 +256,17 @@ def run_interview_prep():
             print("Bye")
             break
 
+        turn += 1
         state["messages"] = state.get("messages", []) + [
             {"role": "user", "content": user_input}
         ]
 
-        state = graph.invoke(state)
+        run_config: RunnableConfig = {
+            "run_name": "interview-turn",
+            "tags": ["interview-prep", "cli"],
+            "metadata": {"surface": "cli", "turn": turn},
+        }
+        state = graph.invoke(state, config=run_config)
 
         messages = state.get("messages") or []
         if messages:

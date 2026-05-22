@@ -18,7 +18,7 @@ When making trade-offs, prefer a runnable end-to-end flow with well-scoped agent
 
 ## Problem statement
 
-A recruiter or technical interviewer at a mid-sized tech company opens our tool when a fresh CV lands against an open role. Today they spend 15–30 minutes per CV skimming for relevant skills, second-guessing seniority, mentally matching against the JD, then context-switching again to draft interview questions — and they do this dozens of times a week, so the later CVs get rushed and inconsistent. **CV-Screener takes a candidate CV and a job description and returns a structured hiring recommendation in under a minute**: a candidate summary, matched/missing skills, strengths and concerns, a score out of 10, a deterministic Shortlist / Hold / Reject call, and at least 5 tailored interview questions. Success = the recruiter can act on the output without re-reading the CV, and a second run on the same inputs produces a consistent recommendation. We use multiple agents (not one prompt) because *analysis*, *scoring*, and *question generation* are distinct judgment calls — separating them makes each step inspectable and the final recommendation defensible.
+A recruiter or technical interviewer at a mid-sized tech company opens our tool when a fresh CV lands against an open role. Today they spend 15–30 minutes per CV skimming for relevant skills, second-guessing seniority, mentally matching against the JD, then context-switching again to draft interview questions — and they do this dozens of times a week, so the later CVs get rushed and inconsistent. **CV-Screener takes a candidate CV and a job description and returns a structured hiring recommendation in under a minute**: matched/missing skills, an assessed seniority band, strengths and concerns, integrity/fairness flags, a weighted score out of 10, a deterministic Shortlist / Hold / Reject call, and at least 5 tailored interview questions. Success = the recruiter can act on the output without re-reading the CV, and a second run on the same inputs produces a consistent recommendation. We use a **multi-agent graph** (not one prompt) because *parsing*, *skill/seniority/experience assessment*, *integrity & fairness*, *scoring*, and *question generation* are distinct judgment calls — separating them makes each step inspectable, lets us run the assessment agents in parallel, and inserts two **human-in-the-loop confidence gates** (after parsing and after the integrity check) where the recruiter is asked to approve before the pipeline continues. The final score → recommendation mapping is deterministic Python so the call can never contradict the score the LLM proposed.
 
 ## Golden-path scenarios (demo + regression targets)
 
@@ -34,17 +34,41 @@ Three cases that exercise every decision branch. These double as the live-demo s
 
 ## Agent role contracts
 
-| Agent | Purpose | Input | Output | Must NOT do | Hands off when |
+The pipeline has **8 functional agents + 2 HITL gates**. Visualised as a mermaid flowchart it's a vertical pipeline with a 3-way parallel fan-out in the middle. Source-of-truth diagram: `docs/recruiter_screening.mmd` (the mermaid code the design was approved against).
+
+```
+START → input_handler → parser → conf_gate_1
+                                   ├─ low_conf → END (HITL: needs review)
+                                   └─ pass → ┬── skill_match ──┐
+                                             ├── seniority ────┼──► integrity → conf_gate_2
+                                             └── experience ───┘                  ├─ high_risk → END (HITL: needs review)
+                                                                                  └─ pass → scorer → recommendation
+                                                                                                      ├─ Reject → END
+                                                                                                      └─ else → questions → END
+```
+
+| # | Agent | Type | Input | Output (state keys it writes) | Must NOT do |
 | --- | --- | --- | --- | --- | --- |
-| **CV Analyzer** | Extract a structured candidate profile from raw CV text | Raw CV text | `{skills[], years_experience, projects[], seniority, domains[]}` | Compare to JD, score, or recommend — analysis only | Profile object is populated |
-| **Fit Scorer** | Compare profile against JD and produce a defensible recommendation | Analyzer output + JD (+ optional must-have / nice-to-have skills, seniority) | `{matched_skills[], missing_skills[], strengths[], concerns[], score:int(0-10), recommendation, reasoning}` | Generate interview questions; invent skills not present in the CV; pick a recommendation that contradicts the score band | Score and recommendation are set |
-| **Interview Question Generator** *(optional per brief, kept in for demo)* | Produce ≥5 role-specific questions targeting strengths to verify and gaps to probe | Analyzer output + Scorer output | `questions: [{area, question, why_asked}]` (≥5) | Re-score, change the recommendation, or ask generic "tell me about yourself" filler | 5+ questions exist, each tagged to a strength or concern |
+| 0 | **Input Handler** | Entry node | Raw CV file/text + JD file/text | `cv_text`, `jd_text` | LLM work; just normalises text |
+| 1 | **Parsing Agent** | LLM | `cv_text`, `jd_text` | `cv_profile = {skills[], years_experience, projects[], domains[], education}`, `jd_profile = {required_skills[], nice_to_have[], target_seniority, domain}`, `parse_confidence: float` | Compare or score — extraction only |
+| — | **Confidence Gate #1** | Conditional edge (HITL) | `parse_confidence` | Routes to `human_review_1` (END) when conf < threshold, else to fan-out | Auto-bypass the gate — recruiter must Approve in UI |
+| 2 | **Skill Match** | LLM (parallel) | `cv_profile`, `jd_profile` | `matched_skills[]`, `missing_skills[]` | Score, assess seniority, or invent skills not in CV |
+| 3 | **Seniority** | LLM (parallel) | `cv_profile`, `jd_profile` | `assessed_seniority: "junior"|"mid"|"senior"`, `seniority_evidence` | Score or recommend |
+| 4 | **Experience** | LLM (parallel) | `cv_profile`, `jd_profile` | `strengths[]`, `concerns[]` | Score, recommend, or duplicate skill matching |
+| 5 | **Integrity & Fairness** | LLM | all upstream outputs | `gaps[]`, `inconsistencies[]`, `bias_flags[]`, `risk_confidence: float` | Score, modify the candidate profile, or block solely on protected-class signals (it flags, the recruiter decides) |
+| — | **Confidence Gate #2** | Conditional edge (HITL) | `risk_confidence` + `bias_flags` count | Routes to `human_review_2` (END) when high-risk, else to scorer | Auto-bypass — recruiter must Approve |
+| 6 | **Scoring Agent** | **Deterministic Python** | matched/missing skills, assessed seniority, domain match, education | `score: int(0–10)` via weighted formula: `0.4·skills + 0.3·seniority + 0.2·domain + 0.1·edu` | Call the LLM; produce a recommendation; deviate from the weighting without explicit recruiter override |
+| — | *Human Override* | *(skipped in v1 — see Non-goals)* | — | — | — |
+| 7 | **Recommendation** | **Deterministic Python** | `score` | `recommendation: "Shortlist"|"Hold"|"Reject"` via `>=8 / 5-7 / <5` | Reason about the candidate — pure mapping |
+| 8 | **Interview Questions** | LLM (conditional) | all upstream outputs | `questions: [{area, question, why_asked}]` (≥5) — **skipped if recommendation == "Reject"** | Re-score, change recommendation, or ask generic "tell me about yourself" filler |
+| 9 | *Recruiter Report* | Streamlit view | full state | Renders score breakdown, flags, questions | Not a graph node; pure presentation |
 
 **Decision logic (enforced in code, not the LLM):**
-`score >= 8 → Shortlist`, `5 <= score <= 7 → Hold`, `score < 5 → Reject`.
-The LLM proposes a score; the score→recommendation mapping is deterministic Python. Judges can trust that the recommendation can never contradict the score.
+`score >= 8 → Shortlist`, `5 <= score <= 7 → Hold`, `score < 5 → Reject`. The LLM never proposes the recommendation; the scorer's integer goes through pure Python. Judges can trust the recommendation can never contradict the score.
 
-**Orchestration:** `CV Analyzer → Fit Scorer → Interview Question Generator`. Question generation is skipped when `recommendation == "Reject"` (saves tokens, matches real recruiter behavior).
+**HITL hard-stop pattern (v1 implementation):** the two confidence gates terminate the graph early at a `human_review_*` sink node. The Streamlit app inspects the terminal state, renders the partial output plus an **Approve / Override** panel, and on Approve, calls `graph.invoke()` a second time with the gate's `pass` branch forced (by setting a `force_pass_gate_n` flag in the input state). No Postgres checkpointer — the paused state lives in `st.session_state` between clicks. The `human_override` node from the original diagram is deferred to v2.
+
+**Parallel fan-out:** `skill_match`, `seniority`, and `experience` all receive an edge from the `conf_gate_1.pass` branch. Each writes to disjoint state keys so the `add_messages`-style reducer never has to merge conflicting updates. The `integrity` node is the join point — LangGraph only fires it once all three parallel branches have returned.
 
 ## Acceptance criteria (judge-visible checklist)
 
@@ -53,14 +77,19 @@ Demo is "done" when **all** of these are demonstrably true on stage:
 - [ ] User submits a CV and a job description through the UI.
 - [ ] System returns a **structured** evaluation (not free-form prose).
 - [ ] Output includes a **score (0–10)** and a **recommendation** (Shortlist / Hold / Reject).
-- [ ] Output includes **reasoning** that cites specific CV evidence.
+- [ ] Score is produced by a **deterministic weighted formula** (40/30/20/10), not by the LLM directly.
+- [ ] Output includes **reasoning** that cites specific CV evidence (strengths/concerns name items from the parsed profile).
+- [ ] **Integrity & Fairness flags** are surfaced (gaps, inconsistencies, bias signals).
 - [ ] System generates **≥5 interview questions** (except on Reject).
-- [ ] **≥2 agents are clearly involved** and visible in the run — agent boundaries shown in the UI, logs, or trace panel.
+- [ ] **≥2 agents are clearly involved** and visible in the run — agent boundaries shown in the UI, logs, or trace panel. (We have 8, the parallel fan-out is the headline.)
+- [ ] **HITL gates trigger and resolve correctly**: at least one golden-path scenario fires a confidence gate, and the Approve button resumes the pipeline to completion.
 
 ## Non-goals (explicit scope discipline)
 
 Out of scope for the hackathon demo — listed so we don't accidentally build them and dilute Correctness:
 
+- **Human Override node** (mid-pipeline weight adjustment) — deferred to v2. v1 hard-codes the 40/30/20/10 weights. If we add it back, the cleanest place is between `scorer` and `recommendation`, as a Streamlit panel that lets the recruiter bump the integer score.
+- **Real LangGraph `interrupt_before` + Postgres checkpointer** — we use a lighter "hard-stop + force_pass flag" pattern (see Agent role contracts) so persistence stays out of scope and the demo runs purely in-memory.
 - Recruiter-friendly polished summary export, technical-interviewer briefing note, technical-vs-communication split scoring, PDF/email export *(brief's "Stretch Ideas" — pursue only after acceptance criteria are green and the demo runs end-to-end).*
 - Multi-CV batch screening, ATS integration, candidate-facing UI, authentication, persistence across sessions.
 - Fine-tuning, custom embeddings, RAG over a JD corpus — single-shot LLM calls per agent are enough.
@@ -111,13 +140,15 @@ START → classifier → router → (technical | behavioral | hr_career) → coa
 
 ## Using this as the CV-Screener boilerplate
 
-When pivoting to the problem statement above, the interview-prep graph is the template — same shape, different agents:
+When pivoting to the problem statement above, the interview-prep graph at `apps/api/src/api/agent/graph.py` is the template — same file layout, different topology:
 
-- `classifier` / `router` are not needed (CV-Screener has a fixed pipeline, not a branch). Replace with a linear `START → analyzer → scorer → questions → END`.
-- `coach_agent` is the closest analogue to the **Interview Question Generator** — a downstream agent that reads upstream state and writes to its own state key without mutating `messages`. Mirror that pattern.
-- The deterministic `score → recommendation` mapping (see Agent role contracts) should live as plain Python inside or after the `scorer` node, **not** as an LLM instruction.
-- Keep the `graph.stream(...)` + `st.status` pattern from `interview_app.py` — judges' acceptance criterion "≥2 agents clearly involved and visible in the run" is satisfied by exactly this panel.
-- Keep the LangSmith `RunnableConfig` wrapping per turn so demo runs are inspectable; rename `run_name` to something like `cv-screening-run`.
+- `classifier` / `router` go away. The CV-Screener pipeline has a fixed shape (see Agent role contracts) — not a content-based branch.
+- The three parallel specialists (`technical` / `behavioral` / `hr_career`) become the three parallel **assessment** agents (`skill_match` / `seniority` / `experience`). Same `add_node` + multi-edge fan-out pattern — just three edges out of `conf_gate_1.pass` instead of a conditional edge picking one specialist.
+- `coach_agent` is the closest analogue to the **Interview Questions** agent — both read upstream state and write to a separate state key without mutating `messages`. Mirror that. Add a conditional edge **before** it that routes to END when `recommendation == "Reject"`.
+- The deterministic `score → recommendation` mapping (see Agent role contracts) should live as plain Python inside or after the `scorer` node, **not** as an LLM instruction. Same goes for the weighted-score formula in `scorer`.
+- HITL gates use the same `add_conditional_edges` pattern as the existing `router` node — the only twist is that one branch ends at a `human_review_*` sink node which the Streamlit app inspects and resumes from. See "HITL hard-stop pattern" under Agent role contracts.
+- Keep the `graph.stream(...)` + `st.status` pattern from `apps/web/streamlit_app.py` — judges' acceptance criterion "≥2 agents clearly involved and visible in the run" is satisfied by exactly this panel. The fan-out makes it more visually impressive (three agents firing in parallel).
+- Keep the LangSmith `RunnableConfig` wrapping per turn so demo runs are inspectable; rename `run_name` from `interview-turn` to `cv-screening-run`.
 
 ## Target project structure (CV-Screener build plan)
 
@@ -259,11 +290,18 @@ CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ## Build order (mapped to acceptance criteria)
 
-Do these in order; each step makes one acceptance criterion demonstrable.
+Do these in order; each step lights up one acceptance-criteria checkbox. **Step 0 is done** — the file-layout split, FastAPI scaffolding, and Docker setup landed in the interview-prep refactor.
 
-1. **Split `interview.py` into `agent/graph.py` + `agent/agents/*.py` + `agent/state.py`** — no behavior change yet. Verifies the split works before changing agent roles.
-2. **Swap the three specialists for `analyzer` → `scorer` → `questions`**, linear edges, drop `classifier`/`router`. Add `ScreeningState` with the 7 required fields. → satisfies "≥2 agents clearly involved" and "structured evaluation".
-3. **Implement deterministic `score → recommendation` in Python after the `scorer` node.** → satisfies "score (0–10) and recommendation".
-4. **Skip-on-Reject edge for the `questions` node** (`add_conditional_edges` reading `recommendation`). → satisfies "≥5 interview questions (except on Reject)".
-5. **Hard-code the 3 golden-path scenarios into `agent/data/`** and add a Streamlit dropdown to load them. → satisfies the live-demo script.
-6. **Wrap in FastAPI + Docker only if time permits** — the Streamlit UI alone is enough to clear all acceptance criteria. FastAPI adds judging headroom on Technical Depth (15%) but is not a correctness requirement.
+0. ~~Split `interview.py` into `agent/graph.py` + `agent/agents/*.py` + `agent/state.py`, add FastAPI + Docker scaffolding~~ ✅ done.
+1. **Define `ScreeningState` and the parser agent.** New TypedDict in `agent/state.py` with all 13+ fields (cv_text, jd_text, cv_profile, jd_profile, parse_confidence, matched_skills, missing_skills, assessed_seniority, strengths, concerns, gaps, inconsistencies, bias_flags, risk_confidence, score, recommendation, questions, force_pass_gate_1, force_pass_gate_2). Implement `parser` agent. → unblocks every downstream step.
+2. **Implement the three parallel assessment agents** (`skill_match`, `seniority`, `experience`) with the fan-out + join pattern. Each writes disjoint state keys. → satisfies "≥2 agents clearly involved" and the parallel-execution visibility.
+3. **Implement `integrity_fairness` agent** writing `gaps`, `inconsistencies`, `bias_flags`, `risk_confidence`. → satisfies "Integrity & Fairness flags surfaced".
+4. **Implement deterministic `scorer` (weighted 40/30/20/10) and `recommendation` (`>=8/5-7/<5`) as plain Python nodes.** → satisfies "score (0–10) + recommendation" and "deterministic weighted formula".
+5. **Implement `interview_questions` agent with the skip-on-Reject conditional edge.** → satisfies "≥5 interview questions (except on Reject)".
+6. **Wire the two HITL confidence gates** (`conf_gate_1` after parser, `conf_gate_2` after integrity) as `add_conditional_edges` routing to `human_review_*` sink nodes. → unblocks step 7.
+7. **Build the Streamlit Approve/Override panel** that detects a `human_review_*` terminal state, renders the partial output, and on Approve re-invokes the graph with the `force_pass_gate_n` flag set. → satisfies "HITL gates trigger and resolve correctly".
+8. **Hard-code the 3 golden-path scenarios into `agent/data/`** (sample_cvs.py + sample_jds.py) and add a Streamlit dropdown to load them. → satisfies the live-demo script.
+9. **Build the Recruiter Report UI** — structured layout with score breakdown, flags, questions. Replaces the interview-prep chat layout entirely for the CV-Screener page. → satisfies "User submits CV + JD, structured evaluation returned".
+10. *(Stretch)* Add the `/api/screen` + `/api/screen/stream` REST endpoints by copy-adapting `apps/api/src/api/routers/interview.py`. Renames the router and the graph node names referenced in the SSE event taxonomy. Not required for acceptance — the Streamlit UI alone satisfies every checkbox.
+
+**Cutover strategy:** keep `apps/api/src/api/agent/graph.py` (interview-prep) alive until step 5 is green, then rename it to `interview_graph.py` and create a fresh `cv_screening_graph.py` next to it. The Streamlit interview-prep page stays runnable as a fallback demo through step 8.

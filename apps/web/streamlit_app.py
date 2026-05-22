@@ -1,7 +1,21 @@
+"""Streamlit UI for the interview-prep graph.
+
+This is the ported replacement for the original root-level ``interview_app.py``.
+It imports the compiled graph from ``api.agent.graph`` (the new module location)
+and preserves the multi-turn history rebuild, ``st.status`` panel, and
+LangSmith RunnableConfig wrapping from the original.
+
+Run with::
+
+    uv run streamlit run apps/web/streamlit_app.py
+"""
+
+from __future__ import annotations
+
 import streamlit as st
 from langchain_core.runnables import RunnableConfig
 
-from interview import graph
+from api.agent.graph import graph
 
 st.set_page_config(
     page_title="Interview Prep Workflow",
@@ -76,7 +90,6 @@ def run_graph_with_status(user_text: str):
         }
 
         # Group this turn under a single named parent run in LangSmith.
-        # Turn number = (existing user messages + 1) // 2 once we've appended.
         turn_number = sum(1 for m in st.session_state.messages if m["role"] == "user")
         run_config: RunnableConfig = {
             "run_name": "interview-turn",

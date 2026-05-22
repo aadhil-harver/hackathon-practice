@@ -118,3 +118,152 @@ When pivoting to the problem statement above, the interview-prep graph is the te
 - The deterministic `score → recommendation` mapping (see Agent role contracts) should live as plain Python inside or after the `scorer` node, **not** as an LLM instruction.
 - Keep the `graph.stream(...)` + `st.status` pattern from `interview_app.py` — judges' acceptance criterion "≥2 agents clearly involved and visible in the run" is satisfied by exactly this panel.
 - Keep the LangSmith `RunnableConfig` wrapping per turn so demo runs are inspectable; rename `run_name` to something like `cv-screening-run`.
+
+## Target project structure (CV-Screener build plan)
+
+Reference: `customer-support-multi-agent-platform` (FastAPI + LangGraph monorepo). We mirror its layout so the move from "single Streamlit script" → "structured demo" is mechanical, not a rewrite. Adapt — do not copy verbatim — and keep the Streamlit UI as the primary surface; the FastAPI app is optional but unlocks the `/api/chat/stream` SSE pattern judges find easier to read than `st.status`.
+
+```
+hackathon-practice/
+├── apps/
+│   ├── api/                              # FastAPI + LangGraph backend (optional but recommended)
+│   │   ├── Dockerfile
+│   │   ├── pyproject.toml
+│   │   ├── uv.lock
+│   │   └── src/api/
+│   │       ├── __init__.py
+│   │       ├── main.py                   # FastAPI app factory + lifespan + CORS
+│   │       ├── config.py                 # pydantic-settings Settings class
+│   │       ├── cli.py                    # Typer CLI (`api dev`, `api serve`)
+│   │       ├── agent/
+│   │       │   ├── __init__.py
+│   │       │   ├── graph.py              # build_graph() → compiled StateGraph
+│   │       │   ├── state.py              # ScreeningState TypedDict
+│   │       │   ├── agents/               # System prompts per agent
+│   │       │   │   ├── analyzer.py
+│   │       │   │   ├── scorer.py
+│   │       │   │   └── questions.py
+│   │       │   └── data/                 # Sample CVs + JDs for the 3 golden-path scenarios
+│   │       │       ├── sample_cvs.py
+│   │       │       └── sample_jds.py
+│   │       └── routers/
+│   │           ├── __init__.py
+│   │           └── screen.py             # POST /api/screen, POST /api/screen/stream
+│   └── web/                              # Streamlit UI (keep) OR Next.js (stretch)
+│       └── streamlit_app.py              # current interview_app.py, repurposed
+├── packages/                             # Shared schemas (future use)
+├── docker-compose.yml
+├── .env.example
+├── CLAUDE.md
+└── README.md
+```
+
+**Migration hint:** the current `interview.py` collapses graph + agents + CLI into one file. The reference splits them into `agent/graph.py`, `agent/agents/*.py` (prompts only), `agent/state.py`, and `cli.py`. Do this split as the *first* refactor so each agent's prompt is its own diff and adding the third agent doesn't conflict.
+
+## FastAPI + LangGraph setup (from reference)
+
+Anchor patterns to lift wholesale. Each one solves a specific demo problem.
+
+**1. App factory + lifespan** (`apps/api/src/api/main.py`) — build the graph once at startup, hang it on `app.state.graph`, close any pools at shutdown:
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.graph = build_graph()        # add checkpointer arg if persistence is in scope
+    yield
+    # pool.close() etc.
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="CV-Screener API", lifespan=lifespan)
+    app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins_list, ...)
+    app.include_router(screen_router)
+    @app.get("/api/health")
+    async def health(): return {"status": "ok"}
+    return app
+
+app = create_app()
+```
+
+**2. Settings via pydantic-settings** (`config.py`) — `BaseSettings` with `env_file=".env"`, an `@lru_cache` `get_settings()`, and a `cors_origins_list` property that splits a comma-separated env var. Keep the existing `OPENROUTER_API_KEY` / `INTERVIEW_MODEL` keys and add `cv_screener_*` analogues; do **not** introduce a parallel `os.getenv` path.
+
+**3. Two endpoints, not one** (`routers/screen.py`):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/health` | Liveness probe (Docker healthcheck, smoke tests) |
+| `POST` | `/api/screen` | Full pipeline → JSON `{summary, matched_skills, missing_skills, strengths, concerns, score, recommendation, questions, reasoning}` |
+| `POST` | `/api/screen/stream` | Same input, streams agent transitions as SSE so the UI can show "analyzer → scorer → questions" live |
+
+The reference's SSE event taxonomy maps cleanly: rename `agent` → `agent` (same), `tool_call` is unused (we have no tools), keep `token` for live streaming, `done` for completion. The `astream_events(..., version="v2")` loop in `routers/agent.py:107` is the template — copy the structure, swap the node-name set.
+
+**4. Typer CLI for dev/prod parity** (`cli.py`) — `api dev` (uvicorn with `--reload`) and `api serve` (production, configurable workers). Exposed via `[project.scripts]` in `pyproject.toml`:
+
+```toml
+[project.scripts]
+api = "api.cli:app"
+```
+
+**5. Async LLM calls.** The reference uses `await llm.ainvoke(...)` inside async nodes — this is what makes SSE streaming responsive. Convert the current synchronous `llm.invoke(...)` calls in `interview.py` to `ainvoke` when promoting to FastAPI; the Streamlit path can stay sync.
+
+## Docker setup
+
+`docker-compose.yml` at repo root, services built from `apps/api/Dockerfile` (+ optional `apps/web/Dockerfile`). For the hackathon, **skip Postgres and Redis unless you're adding the LangGraph checkpointer for multi-session persistence** (currently a non-goal — see Non-goals above).
+
+**Minimal compose (no persistence):**
+
+```yaml
+services:
+  api:
+    build: { context: ./apps/api, dockerfile: Dockerfile }
+    env_file: .env
+    ports: ["${API_PORT:-8000}:8000"]
+    develop:
+      watch:
+        - { action: sync,    path: ./apps/api/src,           target: /app/src }
+        - { action: rebuild, path: ./apps/api/pyproject.toml }
+
+  web:
+    build: { context: ./apps/web, dockerfile: Dockerfile }
+    env_file: .env
+    environment:
+      API_URL: http://api:8000           # service name, not localhost — same docker network
+    ports: ["8501:8501"]                 # streamlit default; 3000 if Next.js
+    depends_on: [api]
+```
+
+If persistence becomes in-scope, add the `postgres` (postgres:16-alpine) and `redis` (redis:7-alpine) services from the reference's `docker-compose.yml` verbatim, plus `langgraph-checkpoint-postgres` to `pyproject.toml` and the `create_checkpointer()` pool from `agent/checkpointer.py`.
+
+**API Dockerfile pattern** — multi-stage with uv, copy-lockfile-first for layer caching:
+
+```dockerfile
+FROM python:3.12-slim AS builder
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+WORKDIR /app
+COPY pyproject.toml uv.lock .python-version ./
+RUN uv sync --no-dev --no-install-project
+COPY src/ ./src/
+RUN uv sync --no-dev
+
+FROM python:3.12-slim AS runtime
+WORKDIR /app
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+EXPOSE 8000
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+**`.env.example` at repo root** — list every variable the compose file references so a fresh clone is one `cp .env.example .env` + key paste away from runnable. Match the reference's section headers (`# ─── LLM ───`, `# ─── API ───`, etc.) for readability.
+
+**Demo command:** `docker compose up --build` → API at `localhost:8000` (`/docs` for Swagger), UI at `localhost:8501` (Streamlit) or `localhost:3000` (Next.js). This is the live-demo entry point; rehearse it once before the hackathon.
+
+## Build order (mapped to acceptance criteria)
+
+Do these in order; each step makes one acceptance criterion demonstrable.
+
+1. **Split `interview.py` into `agent/graph.py` + `agent/agents/*.py` + `agent/state.py`** — no behavior change yet. Verifies the split works before changing agent roles.
+2. **Swap the three specialists for `analyzer` → `scorer` → `questions`**, linear edges, drop `classifier`/`router`. Add `ScreeningState` with the 7 required fields. → satisfies "≥2 agents clearly involved" and "structured evaluation".
+3. **Implement deterministic `score → recommendation` in Python after the `scorer` node.** → satisfies "score (0–10) and recommendation".
+4. **Skip-on-Reject edge for the `questions` node** (`add_conditional_edges` reading `recommendation`). → satisfies "≥5 interview questions (except on Reject)".
+5. **Hard-code the 3 golden-path scenarios into `agent/data/`** and add a Streamlit dropdown to load them. → satisfies the live-demo script.
+6. **Wrap in FastAPI + Docker only if time permits** — the Streamlit UI alone is enough to clear all acceptance criteria. FastAPI adds judging headroom on Technical Depth (15%) but is not a correctness requirement.

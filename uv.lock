@@ -448,6 +448,7 @@ dependencies = [
     { name = "langchain", extra = ["groq"] },
     { name = "langchain-openai" },
     { name = "langgraph" },
+    { name = "langsmith" },
     { name = "python-dotenv" },
     { name = "streamlit" },
 ]
@@ -458,6 +459,7 @@ requires-dist = [
     { name = "langchain", extras = ["groq"], specifier = ">=1.2.18" },
     { name = "langchain-openai", specifier = ">=1.2.1" },
     { name = "langgraph", specifier = ">=1.1.10" },
+    { name = "langsmith", specifier = ">=0.8.3" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "streamlit", specifier = ">=1.40.0" },
 ]

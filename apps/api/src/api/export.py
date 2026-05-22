@@ -34,7 +34,9 @@ REC_COLORS = {
     "Reject": colors.HexColor("#D85A30"),
 }
 
-AVATAR_COLOR = colors.HexColor("#7F77DD")
+# Harver-aligned brand colours. The on-screen UI uses the same palette.
+AVATAR_COLOR = colors.HexColor("#FF8B5E")
+BRAND_PEACH_BG = colors.HexColor("#FFF7F2")
 
 
 def _initials(name: str | None) -> str:
@@ -204,7 +206,7 @@ def state_to_pdf(state: dict) -> bytes:
     chips.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F1EFE8")),
+                ("BACKGROUND", (0, 0), (-1, -1), BRAND_PEACH_BG),
                 ("LEFTPADDING", (0, 0), (-1, -1), 10),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 10),
                 ("TOPPADDING", (0, 0), (-1, 0), 8),
@@ -264,7 +266,7 @@ def state_to_pdf(state: dict) -> bytes:
         breakdown_table.setStyle(
             TableStyle(
                 [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F1EFE8")),
+                    ("BACKGROUND", (0, 0), (-1, 0), BRAND_PEACH_BG),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                     ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
                     ("LEFTPADDING", (0, 0), (-1, -1), 8),

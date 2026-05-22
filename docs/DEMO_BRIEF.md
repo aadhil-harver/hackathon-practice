@@ -2,7 +2,12 @@
 
 ## 1 · What it does (60-second pitch)
 
-A recruiter or technical interviewer drops a CV file and pastes a JD into the tool. In under a minute they get back a structured hiring recommendation: a parsed candidate profile, matched/missing skills, strengths/concerns, integrity & fairness flags, a defensible weighted score out of 10, a deterministic **Shortlist / Hold / Reject** call, and ≥5 tailored interview questions — exportable as a PDF. The work is split across **8 specialised agents in a LangGraph pipeline** so each judgment call (parsing, skill match, seniority assessment, experience fit, integrity check, scoring, recommendation, question generation) is inspectable, testable, and **defensible** rather than a black-box prompt.
+A recruiter or technical interviewer drops a CV file and pastes a JD into the tool. 
+In under a minute they get back a structured hiring recommendation: a parsed candidate profile, matched/missing skills, strengths/concerns,
+integrity & fairness flags, a defensible weighted score out of 10, a deterministic **Shortlist / Hold / Reject** call, and ≥5 tailored interview questions
+— exportable as a PDF. The work is split across **8 specialised agents in a LangGraph pipeline** so each judgment call (parsing, skill match, 
+seniority assessment, experience fit, integrity check, scoring, recommendation, question generation) is inspectable, testable, 
+and **defensible** rather than a black-box prompt.
 
 ## 2 · Architecture at a glance
 

@@ -1,0 +1,21 @@
+# Harver-aligned Streamlit theme.
+#
+# Pure visual customisation — no behaviour changes. Streamlit picks this up
+# automatically when launched from the repo root (or via `uv run streamlit run
+# apps/web/cv_screener_app.py`).
+#
+# Palette rationale:
+#   primaryColor          — Harver-ish peach for clickable elements (Run button, sliders).
+#   backgroundColor       — clean white, matches their generous-whitespace aesthetic.
+#   secondaryBackgroundColor — barely-there peach tint for sidebar / expanders / inputs.
+#   textColor             — near-black for body text, high contrast on white.
+
+[theme]
+primaryColor = "#FF8B5E"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#FFF7F2"
+textColor = "#1A1A1A"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
